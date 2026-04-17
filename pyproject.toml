@@ -1,0 +1,14 @@
+[project]
+name = "Atlas-plusplus"
+version = "1.0.0"
+description = "Automating Cross-Language Fuzzing on Android Closed-Source Libraries"
+requires-python = ">=3.12"
+dependencies = [
+    "git+https://github.com/ChongChengAC/androguard.git@dev",
+    "termcolor",
+    "networkx",
+    "scikit-learn",
+]
+
+[tool.black]
+line-length = 100

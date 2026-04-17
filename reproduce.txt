@@ -1,0 +1,88 @@
+# SamsungCamera
+Lcom/samsung/android/panorama/InterfaceNative;
+Lcom/samsung/android/smartscan/SmartScanRectify;
+Lcom/samsung/srcb/eventdetector/JNI;
+Lcom/samsung/srcb/highlight/JNI;
+Lcom/samsung/android/qrengine/QRBarcodeDecoder;
+Lco/polarr/cv/tracker/CGTracker;
+
+# SamsungGallery2018
+Lcom/quramsoft/agifDecoder/QuramAGIFDecoder;
+Lcom/quramsoft/agifEncoder/QuramAGIFEncoder;
+Lcom/sec/samsung/gallery/decoder/QuramCodecInterface;
+Lvizinsight/atl/gallery_scan/VZGalleryScan;
+
+# secimaging
+Lcom/samsung/android/camera/filter/SemFilterBufferedProcessor;
+
+# semextendedformat
+Lcom/samsung/android/media/QdioJNI;
+Lcom/samsung/android/media/SEFJNI;
+
+# PhotoEditor_Mid
+Lcom/samsung/android/camera/imageprocessing/ImageScreener;
+Lcom/samsung/android/camera/imageprocessing/QualityEvaluator;
+
+# saiv
+Lcom/samsung/android/media/vision/SemMatting;
+Lcom/samsung/android/media/vision/SemSegmentation;
+
+# VideoTrimmer
+Lcom/samsung/android/transcode/util/AudioSolution;
+
+# PhotoRemasterService
+Lcom/samsung/android/photoremaster/engine/nativeInterface/VSWEngineNativeInterface;
+Lcom/samsung/android/sume/MediaBuffer;
+Lcom/samsung/android/sume/core/plugin/SimgpPlugin;
+
+# SamsungTTS
+Lcom/samsung/SMT/engine/SmtTTS;
+
+# Bixby
+Lcom/samsung/voicewakeup/wwv/WakeupWordValidator;
+Lcom/samsung/android/bixby/feature/musicrecognition/solution/GracenoteNativeHelper;
+Lcom/samsung/nlepd/jni/PredictionJNIRnn;
+
+# com.jrzheng.supervpnfree
+Lcom/supersoft/supervpnfree/logic/CharonVpnService;
+
+# me.pou.app
+Ldkqrw/ZgnwF;
+Lcom/adcolony/sdk/ADCNative;
+Lcom/adcolony/sdk/ADCGeneratedCrypto;
+Lcom/adcolony/sdk/ADCVMModule$ADCJSVirtualMachine;
+Lcom/adcolony/sdk/ADCCrashReportManager;
+
+# com.sec.app.samsungprintservice
+Lcom/sec/print/mobileprint/PDLComposer;
+
+# com.vectorunit.purple.googleplay
+Lcom/vectorunit/purple/googleplay/Purple;
+Lcom/vectorunit/VuBillingHelper;
+
+# com.UCMobile.intl
+Lcom/uc/framework/xml/XmlBlockModify;
+Lcom/uc/imagecodec/decoder/gif/GifInfoHandle;
+Lcom/uc/imagecodec/decoder/hevc/HevcInfoHandle;
+Lcom/uc/imagecodec/decoder/jpeg/JpegInfoHandle;
+Lcom/uc/imagecodec/decoder/png/PngInfoHandle;
+Lcom/uc/imagecodec/decoder/webp/WebpInfoHandle;
+Lcom/uc/imagecodec/decoder/bpg/BpgInfoHandle;
+
+# game.bubble.shooter.dragon.pop
+La/a/a/wtf;
+La/a/a/platform;
+Lcom/facebook/appevents/a/AdJniHelper;
+Lcom/tencent/bugly/crashreport/crash/jni/NativeCrashHandler;
+
+# ru.yandex.searchplugin
+Lru/yandex/speechkit/EchoCancellingAudioSource;
+Lru/yandex/speechkit/internal/Timings;
+Lru/yandex/speechkit/internal/JavaToNativeAudioPlayerListenerAdapter;
+Lru/yandex/speechkit/internal/RecognizerJniImpl;
+Lru/yandex/speechkit/internal/SoundLoggerJniImpl;
+Lru/yandex/speechkit/internal/PhraseSpotterJniImpl;
+
+# de.axelspringer.yana.zeropage
+Lde/infonline/android/qdslib/QdsInappWrapper;
+Lcom/comscore/Configuration;

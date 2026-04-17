@@ -1,0 +1,11 @@
+.~lock.*
+.env
+.vscode
+__pycache__
+*.log
+null*
+*.json
+.cache
+main
+*.ods
+*.pdf
