@@ -17,4 +17,27 @@ Run:
    python -m Atlas-plusplus.JavaAnalyzer <apkname> # see `-h`
    ```
 
+### Semantic hints
+
+JavaAnalyzer enables the `path`, `size`, and `array-len` semantic hints by
+default. Use the single `--semantics` option to configure them:
+
+```shell
+# Default behavior: enable every semantic hint.
+python -m Atlas-plusplus.JavaAnalyzer <apkname> --semantics all
+
+# Disable every semantic hint.
+python -m Atlas-plusplus.JavaAnalyzer <apkname> --semantics none
+
+# Disable only path semantics.
+python -m Atlas-plusplus.JavaAnalyzer <apkname> --semantics all,-path
+
+# Enable exactly path and array-length semantics.
+python -m Atlas-plusplus.JavaAnalyzer <apkname> --semantics path,array-len
+```
+
+The selected configuration is printed at startup. Generated variant directory
+names also identify disabled hints, for example `0_all_on`, `1_path_off`, or
+`2_path_off_size_off`.
+
 Check `reproduce.txt` for reproduction.

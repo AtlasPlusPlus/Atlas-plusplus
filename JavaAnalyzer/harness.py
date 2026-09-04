@@ -25,6 +25,9 @@ from .. import config
 
 _FUZZ_INPUT_FD = "stdin"
 
+SEMANTIC_HINTS = ("path", "size", "array-len")
+ALL_SEMANTIC_HINTS = frozenset(SEMANTIC_HINTS)
+
 
 class VarType(Enum):
     UNDEFINED = 0
@@ -180,6 +183,7 @@ def get_instrument_libraries(target_lib: str) -> None:
 class Harness:
     _sequence: list[method.Method | field.Field]
     _native_lib: str
+    _enabled_semantics: frozenset[str]
 
     _created_vars: set[Var]  # {varname1, varname2, ...}
     _alloced_vars: set[Var]  # {varname1, varname2, ...}
@@ -191,13 +195,19 @@ class Harness:
     _declare_codes: list[str]  # used for direct call of `_mock_codes`
     _dynamic_registered: bool  # indicates whether JNI_OnLoad exists, used for JNIMock harness
 
-    def __init__(self, native_lib: str, sequence: list[method.Method | field.Field]) -> None:
+    def __init__(
+        self,
+        native_lib: str,
+        sequence: list[method.Method | field.Field],
+        enabled_semantics: frozenset[str] = ALL_SEMANTIC_HINTS,
+    ) -> None:
         global _normal_file_count, _normal_var_count
         _normal_var_count = 0
         _normal_file_count = 0
 
         self._sequence = sequence
         self._native_lib = native_lib
+        self._enabled_semantics = enabled_semantics
         self._created_vars = set()
         self._alloced_vars = set()
 
@@ -794,7 +804,11 @@ class Harness:
             """
             :return arg: int/string if const source, else synthesised var
             """
-            if Attribute.PATH in param.attribute and param.descriptor == "Ljava/lang/String;":
+            if (
+                "path" in self._enabled_semantics
+                and Attribute.PATH in param.attribute
+                and param.descriptor == "Ljava/lang/String;"
+            ):
                 util.log(LogLevel.WARN, f"sources {param.sources} of PATH is ignored")
                 arg = Var.from_descriptor(param.descriptor)
                 codes += self._create_path_var_with_fuzz_input(arg)
@@ -981,7 +995,31 @@ class Harness:
             args: list[Argument] = []
             array_len_idxs: list[int] = []
             var_count_before = _normal_var_count
-            for i, param in enumerate(node.params):
+            effective_params: list[parameter.Parameter] = []
+            for original_param in node.params:
+                effective_attribute = original_param.attribute
+                if "path" not in self._enabled_semantics:
+                    effective_attribute &= ~Attribute.PATH
+                if "size" not in self._enabled_semantics:
+                    effective_attribute &= ~Attribute.SIZE
+                effective_sources = set(original_param.sources)
+                if "array-len" not in self._enabled_semantics:
+                    effective_sources = {
+                        source
+                        for source in effective_sources
+                        if source.type != operand.OpType.ARRAY_LEN
+                    }
+                effective_params.append(
+                    parameter.Parameter(
+                        original_param.reg,
+                        original_param.descriptor,
+                        effective_attribute,
+                        effective_sources,
+                        original_param.traced,
+                    )
+                )
+
+            for i, param in enumerate(effective_params):
                 if not param.descriptor.startswith("["):
                     param.sources = set(
                         src for src in param.sources if src.type != operand.OpType.NEW_ARRAY
@@ -1034,10 +1072,12 @@ class Harness:
                 args.append(synthesis_arg_with_source(param, codes, array_len_idxs))
             for array_len_idx in array_len_idxs:
                 array_length_var = synthesis_array_length(
-                    node.params[array_len_idx], var_count_before
+                    effective_params[array_len_idx], var_count_before
                 )
                 if array_length_var is None:
-                    array_length_var = Var.from_descriptor(node.params[array_len_idx].descriptor)
+                    array_length_var = Var.from_descriptor(
+                        effective_params[array_len_idx].descriptor
+                    )
                     codes += self._create_length_var_with_fuzz_input(array_length_var)
                 args[array_len_idx] = array_length_var
 
@@ -1119,8 +1159,29 @@ class Harness:
         api_namesig = api_namesig.replace("/", "_").replace(" ", "")
         harness_path = os.path.join(config.HARNESS_PATH, apkname, classname, api_namesig)
         os.makedirs(harness_path, exist_ok=True)
-        id = len(os.listdir(harness_path))
-        harness_path = os.path.join(harness_path, str(id))
+        existing_ids = []
+        for entry in os.scandir(harness_path):
+            if not entry.is_dir():
+                continue
+            prefix = entry.name.split("_", maxsplit=1)[0]
+            if prefix.isdigit():
+                existing_ids.append(int(prefix))
+        harness_id = max(existing_ids, default=-1) + 1
+        disabled_semantics = [
+            hint for hint in SEMANTIC_HINTS if hint not in self._enabled_semantics
+        ]
+        if not disabled_semantics:
+            semantics_suffix = "_all_on"
+        elif len(disabled_semantics) == len(SEMANTIC_HINTS):
+            semantics_suffix = "_all_off"
+        else:
+            semantics_suffix = "_" + "_".join(
+                f"{hint}_off" for hint in disabled_semantics
+            )
+        harness_path = os.path.join(
+            harness_path,
+            f"{harness_id}{semantics_suffix}",
+        )
         os.mkdir(harness_path)
 
         apk_path = os.path.join(config.APK_PATH, apkname + ".apk")
