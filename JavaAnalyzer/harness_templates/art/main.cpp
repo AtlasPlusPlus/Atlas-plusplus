@@ -51,6 +51,15 @@ int init_jvm(JavaVM **p_vm, JNIEnv **p_env, JavaVMInitArgs *args) {
         return JNI_ERR;
     }
 
+    // Build.VERSION is initialized lazily when an application class first
+    // touches the Android framework.  Standalone ART does not have the
+    // Android property service, so install a deterministic, harness-local
+    // SystemProperties backend before any target class is looked up.
+    if (!install_system_properties_compat(*p_env)) {
+        printf("[!] Can't install SystemProperties compatibility layer\n");
+        return JNI_ERR;
+    }
+
     return 0;
 }
 
