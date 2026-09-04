@@ -79,6 +79,11 @@ def main():
         help='target classname, e.g. "Lcom/samsung/android/panorama/InterfaceNative;". None for all classes of target apk.',
     )
     parser.add_argument(
+        "--native-lib",
+        metavar="LIB",
+        help="use LIB as the target native library instead of inferring it per class",
+    )
+    parser.add_argument(
         "--semantics",
         type=_parse_semantics,
         default=harness.ALL_SEMANTIC_HINTS,
@@ -116,7 +121,7 @@ def main():
             continue
         if args.classname and cls.name != args.classname:
             continue
-        native_lib = api.get_class_lib(cls)
+        native_lib = args.native_lib or api.get_class_lib(cls)
         if not native_lib:
             util.log(LogLevel.DEBUG, f"native library of {cls.name} not found")
             continue
