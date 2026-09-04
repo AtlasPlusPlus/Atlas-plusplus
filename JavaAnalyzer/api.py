@@ -162,6 +162,8 @@ def add_rwa_info() -> None:
                     arg_desc, _, _ = method.descriptor.removeprefix("(").partition(")")
                     class_name = arg_desc.split()[param_idx]
                 target_class = shared.analysis.get_class_analysis(class_name)
+                if target_class is None:
+                    continue
             if target_class.is_external():
                 util.log(
                     LogLevel.WARN,

@@ -326,6 +326,8 @@ class Harness:
         :param classname: Lcom/example;
         """
         cls = shared.analysis.get_class_analysis(classname)
+        if cls is None:
+            raise WontImplementError(f"class not found: {classname}")
         if cls.is_external() and not cls.is_android_api():
             raise WontImplementError(f"external class {classname} is not supported yet!")
         cls_var = Var.from_descriptor(classname)
