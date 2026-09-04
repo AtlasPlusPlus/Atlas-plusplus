@@ -9,6 +9,7 @@ from enum import Enum, auto
 from pathlib import Path
 import os
 import io
+import re
 import shutil
 import subprocess
 import struct
@@ -52,6 +53,32 @@ _normal_var_count: int  # record the number of vars created, used for subscript 
 _normal_file_count: int
 
 
+def _safe_identifier(name: str) -> str:
+    """Return a valid C/C++ identifier fragment for generated local names."""
+
+    name = re.sub(r"[^0-9A-Za-z_]", "_", name)
+    if not name:
+        return "unnamed"
+    if name[0].isdigit():
+        return "_" + name
+    return name
+
+
+def _is_synthetic_field_getter(method_analysis: MethodAnalysis) -> bool:
+    """Recognize D8/R8's ``-$$Nest$fget<Field>`` accessor methods."""
+
+    return method_analysis.name.startswith("-$$Nest$fget")
+
+
+def _synthetic_field(method_analysis: MethodAnalysis) -> FieldAnalysis:
+    if not _is_synthetic_field_getter(method_analysis):
+        raise InvalidStateError(f"not a synthetic field getter: {method_analysis.full_name}")
+    field_name = method_analysis.name.removeprefix("-$$Nest$fget")
+    if not field_name:
+        raise InvalidStateError(f"malformed synthetic field getter: {method_analysis.full_name}")
+    return util.get_field_analysis_by_name(method_analysis.get_class_name(), field_name)
+
+
 @dataclass(frozen=True)
 class Var:
     _type: VarType
@@ -78,7 +105,10 @@ class Var:
 
         desc = util.normalize_classname(desc)
         if desc.startswith("L") and desc.endswith(";"):
-            return Var(VarType.CLASS, desc.removeprefix("L").removesuffix(";").replace("/", "_"))
+            return Var(
+                VarType.CLASS,
+                _safe_identifier(desc.removeprefix("L").removesuffix(";").replace("/", "_")),
+            )
         global _normal_var_count
         name = generate_name(desc) + f"_{_normal_var_count}"
         _normal_var_count += 1
@@ -97,7 +127,7 @@ class Var:
 
     def get_fieldID(self, field_name: str) -> Var:
         assert self._type == VarType.CLASS
-        return Var(VarType.FIELD_ID, self._name + f"_{field_name}")
+        return Var(VarType.FIELD_ID, self._name + f"_{_safe_identifier(field_name)}")
 
     def get_field_val(self) -> Var:
         assert self._type == VarType.FIELD_ID
@@ -110,11 +140,11 @@ class Var:
             if desc in dex_types.TYPE_DESCRIPTOR:
                 return desc
             if desc.startswith("L") and desc.endswith(";"):
-                return desc.removesuffix(";").rsplit("/", maxsplit=1)[-1]
-            raise NotImplementedError(f"unknown descriptor: {arg_desc}")
+                return _safe_identifier(desc.removesuffix(";").rsplit("/", maxsplit=1)[-1])
+            raise NotImplementedError(f"unknown descriptor: {desc}")
 
         assert self._type == VarType.CLASS
-        method_name = method_analysis.name
+        method_name = _safe_identifier(method_analysis.name)
         arg_descs, _, _ = method_analysis.get_descriptor().removeprefix("(").partition(")")
         for arg_desc in arg_descs.split():
             method_name += "_" + generate_name(arg_desc)
@@ -222,6 +252,9 @@ class Harness:
         for node in sequence:
             if type(node) != method.Method:
                 continue
+            if _is_synthetic_field_getter(node.analysis):
+                # The accessor is emitted as a field read, not a native call.
+                continue
             if "native" not in node.analysis.access:
                 util.log(
                     LogLevel.INFO,
@@ -261,7 +294,7 @@ class Harness:
 
         declare_codes: list[str] = []
         for node in self._sequence:
-            if type(node) != method.Method:
+            if type(node) != method.Method or "native" not in node.analysis.access:
                 continue
             symbol = Var.from_symbol(self._native_lib, node.analysis)
             if not symbol.name.startswith("Java_"):
@@ -720,6 +753,8 @@ class Harness:
         return code
 
     def _CallMethod(self, target_method: MethodAnalysis, args: list[Argument]) -> list[str]:
+        if _is_synthetic_field_getter(target_method):
+            return self._CallSyntheticFieldGetter(target_method, args)
         static = "static" in target_method.access
         cls_var = Var.from_descriptor(target_method.get_class_name())
         codes: list[str] = []
@@ -759,7 +794,43 @@ class Harness:
         codes.append(f'printf("[+] call method {target_method.name} finished!\\n");')
         return codes
 
+    def _CallSyntheticFieldGetter(
+        self, target_method: MethodAnalysis, args: list[Argument]
+    ) -> list[str]:
+        """Emit the JNI field read represented by a D8/R8 synthetic accessor."""
+
+        fld = _synthetic_field(target_method).get_field()
+        classname = fld.get_class_name()
+        cls_var = Var.from_descriptor(classname)
+        codes: list[str] = []
+        if cls_var not in self._created_vars:
+            codes += self._FindClass(classname)
+        static = "static" in fld.get_access_flags_string()
+        if static:
+            receiver = cls_var
+        else:
+            if not args or not isinstance(args[0], Var):
+                raise InvalidStateError(f"synthetic getter has no receiver: {target_method}")
+            receiver = args[0]
+        field_id = cls_var.get_fieldID(fld.get_name())
+        if field_id not in self._created_vars:
+            codes += self._GetFieldID(cls_var, fld.get_name(), fld.get_descriptor(), static)
+        ret_var = cls_var.get_methodID(target_method).get_return_val()
+        jni_type = (
+            dex_types.TYPE_DESCRIPTOR[fld.get_descriptor()].capitalize()
+            if fld.get_descriptor() in dex_types.TYPE_DESCRIPTOR
+            else "Object"
+        )
+        codes.append(
+            f"auto {ret_var}{{env->Get{'Static' if static else ''}{jni_type}Field({receiver}, {field_id})}};"
+        )
+        self._created_vars.add(ret_var)
+        codes.append("check_JNI_exception();")
+        return codes
+
     def _direct_call(self, target_method: MethodAnalysis, args: list[Argument]) -> list[str]:
+        if _is_synthetic_field_getter(target_method):
+            return self._CallSyntheticFieldGetter(target_method, args)
         codes: list[str] = []
         symbol = Var.from_symbol(self._native_lib, target_method)
         native_api = api.find_api(self._native_lib, target_method)
