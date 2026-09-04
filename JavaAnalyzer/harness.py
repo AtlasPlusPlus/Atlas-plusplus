@@ -557,7 +557,9 @@ class Harness:
                 self._created_vars.add(buf_var)
                 if var.__str__() != "temp_str":  # elem of String[]
                     self._alloced_vars.add(buf_var)
-                codes.append(f"auto {buf_var}" + "{new " + f"char[{length_var}]" + "};")
+                codes.append(
+                    f"auto {buf_var}" + "{new " + f"char[{length_var} + 1]" + "{}" + "};"
+                )
                 codes.append(f"fread({buf_var}, sizeof(char), {length_var}, {_FUZZ_INPUT_FD});")
             codes.append(f"auto {var}" + "{" + f"env->NewStringUTF({buf_var})" + "};")
         elif var_desc == "Ljava/nio/ByteBuffer;":  # ByteBuffer
