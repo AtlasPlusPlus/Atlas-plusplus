@@ -10,6 +10,7 @@ export ANDROID_TZDATA_ROOT=/apex/com.android.tzdata
 export ANDROID_ART_ROOT=/apex/com.android.art
 export ANDROID_ROOT=/system
 export ANDROID_I18N_ROOT=/apex/com.android.i18n
+export ATLAS_SYSTEM_PROPERTIES_COMPAT=${ATLAS_SYSTEM_PROPERTIES_COMPAT:-1}
 
 export SYSTEMSERVERCLASSPATH=/system/framework/com.android.location.provider.jar:/system/framework/knoxanalyticssdk.jar:/system/framework/services.jar:/system/framework/ssrm.jar:/system/framework/semwifi-service.jar:/apex/com.android.adservices/javalib/service-adservices.jar:/apex/com.android.adservices/javalib/service-sdksandbox.jar:/apex/com.android.appsearch/javalib/service-appsearch.jar:/apex/com.android.art/javalib/service-art.jar:/apex/com.android.media/javalib/service-media-s.jar:/apex/com.android.permission/javalib/service-permission.jar:/apex/com.samsung.android.ipm/javalib/service-samsung-ipm.jar:/apex/com.samsung.android.shell/javalib/service-samsung-privilege.jar
 export STANDALONE_SYSTEMSERVER_JARS=/apex/com.android.btservices/javalib/service-bluetooth.jar:/apex/com.android.os.statsd/javalib/service-statsd.jar:/apex/com.android.scheduling/javalib/service-scheduling.jar:/apex/com.android.tethering/javalib/service-connectivity.jar:/apex/com.android.uwb/javalib/service-uwb.jar:/apex/com.android.wifi/javalib/service-wifi.jar

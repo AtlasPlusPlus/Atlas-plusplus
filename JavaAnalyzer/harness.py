@@ -9,6 +9,7 @@ from enum import Enum, auto
 from pathlib import Path
 import os
 import io
+import re
 import shutil
 import subprocess
 import struct
@@ -24,6 +25,9 @@ from .shared_def import *
 from .. import config
 
 _FUZZ_INPUT_FD = "stdin"
+
+SEMANTIC_HINTS = ("path", "size", "array-len")
+ALL_SEMANTIC_HINTS = frozenset(SEMANTIC_HINTS)
 
 
 class VarType(Enum):
@@ -47,6 +51,32 @@ class VarType(Enum):
 
 _normal_var_count: int  # record the number of vars created, used for subscript for var names
 _normal_file_count: int
+
+
+def _safe_identifier(name: str) -> str:
+    """Return a valid C/C++ identifier fragment for generated local names."""
+
+    name = re.sub(r"[^0-9A-Za-z_]", "_", name)
+    if not name:
+        return "unnamed"
+    if name[0].isdigit():
+        return "_" + name
+    return name
+
+
+def _is_synthetic_field_getter(method_analysis: MethodAnalysis) -> bool:
+    """Recognize D8/R8's ``-$$Nest$fget<Field>`` accessor methods."""
+
+    return method_analysis.name.startswith("-$$Nest$fget")
+
+
+def _synthetic_field(method_analysis: MethodAnalysis) -> FieldAnalysis:
+    if not _is_synthetic_field_getter(method_analysis):
+        raise InvalidStateError(f"not a synthetic field getter: {method_analysis.full_name}")
+    field_name = method_analysis.name.removeprefix("-$$Nest$fget")
+    if not field_name:
+        raise InvalidStateError(f"malformed synthetic field getter: {method_analysis.full_name}")
+    return util.get_field_analysis_by_name(method_analysis.get_class_name(), field_name)
 
 
 @dataclass(frozen=True)
@@ -75,7 +105,10 @@ class Var:
 
         desc = util.normalize_classname(desc)
         if desc.startswith("L") and desc.endswith(";"):
-            return Var(VarType.CLASS, desc.removeprefix("L").removesuffix(";").replace("/", "_"))
+            return Var(
+                VarType.CLASS,
+                _safe_identifier(desc.removeprefix("L").removesuffix(";").replace("/", "_")),
+            )
         global _normal_var_count
         name = generate_name(desc) + f"_{_normal_var_count}"
         _normal_var_count += 1
@@ -94,7 +127,7 @@ class Var:
 
     def get_fieldID(self, field_name: str) -> Var:
         assert self._type == VarType.CLASS
-        return Var(VarType.FIELD_ID, self._name + f"_{field_name}")
+        return Var(VarType.FIELD_ID, self._name + f"_{_safe_identifier(field_name)}")
 
     def get_field_val(self) -> Var:
         assert self._type == VarType.FIELD_ID
@@ -107,11 +140,11 @@ class Var:
             if desc in dex_types.TYPE_DESCRIPTOR:
                 return desc
             if desc.startswith("L") and desc.endswith(";"):
-                return desc.removesuffix(";").rsplit("/", maxsplit=1)[-1]
-            raise NotImplementedError(f"unknown descriptor: {arg_desc}")
+                return _safe_identifier(desc.removesuffix(";").rsplit("/", maxsplit=1)[-1])
+            raise NotImplementedError(f"unknown descriptor: {desc}")
 
         assert self._type == VarType.CLASS
-        method_name = method_analysis.name
+        method_name = _safe_identifier(method_analysis.name)
         arg_descs, _, _ = method_analysis.get_descriptor().removeprefix("(").partition(")")
         for arg_desc in arg_descs.split():
             method_name += "_" + generate_name(arg_desc)
@@ -180,6 +213,7 @@ def get_instrument_libraries(target_lib: str) -> None:
 class Harness:
     _sequence: list[method.Method | field.Field]
     _native_lib: str
+    _enabled_semantics: frozenset[str]
 
     _created_vars: set[Var]  # {varname1, varname2, ...}
     _alloced_vars: set[Var]  # {varname1, varname2, ...}
@@ -191,13 +225,19 @@ class Harness:
     _declare_codes: list[str]  # used for direct call of `_mock_codes`
     _dynamic_registered: bool  # indicates whether JNI_OnLoad exists, used for JNIMock harness
 
-    def __init__(self, native_lib: str, sequence: list[method.Method | field.Field]) -> None:
+    def __init__(
+        self,
+        native_lib: str,
+        sequence: list[method.Method | field.Field],
+        enabled_semantics: frozenset[str] = ALL_SEMANTIC_HINTS,
+    ) -> None:
         global _normal_file_count, _normal_var_count
         _normal_var_count = 0
         _normal_file_count = 0
 
         self._sequence = sequence
         self._native_lib = native_lib
+        self._enabled_semantics = enabled_semantics
         self._created_vars = set()
         self._alloced_vars = set()
 
@@ -211,6 +251,9 @@ class Harness:
         # check whether the api sequence can run on JNIMock environment
         for node in sequence:
             if type(node) != method.Method:
+                continue
+            if _is_synthetic_field_getter(node.analysis):
+                # The accessor is emitted as a field read, not a native call.
                 continue
             if "native" not in node.analysis.access:
                 util.log(
@@ -251,7 +294,7 @@ class Harness:
 
         declare_codes: list[str] = []
         for node in self._sequence:
-            if type(node) != method.Method:
+            if type(node) != method.Method or "native" not in node.analysis.access:
                 continue
             symbol = Var.from_symbol(self._native_lib, node.analysis)
             if not symbol.name.startswith("Java_"):
@@ -283,6 +326,8 @@ class Harness:
         :param classname: Lcom/example;
         """
         cls = shared.analysis.get_class_analysis(classname)
+        if cls is None:
+            raise WontImplementError(f"class not found: {classname}")
         if cls.is_external() and not cls.is_android_api():
             raise WontImplementError(f"external class {classname} is not supported yet!")
         cls_var = Var.from_descriptor(classname)
@@ -512,7 +557,9 @@ class Harness:
                 self._created_vars.add(buf_var)
                 if var.__str__() != "temp_str":  # elem of String[]
                     self._alloced_vars.add(buf_var)
-                codes.append(f"auto {buf_var}" + "{new " + f"char[{length_var}]" + "};")
+                codes.append(
+                    f"auto {buf_var}" + "{new " + f"char[{length_var} + 1]" + "{}" + "};"
+                )
                 codes.append(f"fread({buf_var}, sizeof(char), {length_var}, {_FUZZ_INPUT_FD});")
             codes.append(f"auto {var}" + "{" + f"env->NewStringUTF({buf_var})" + "};")
         elif var_desc == "Ljava/nio/ByteBuffer;":  # ByteBuffer
@@ -710,6 +757,8 @@ class Harness:
         return code
 
     def _CallMethod(self, target_method: MethodAnalysis, args: list[Argument]) -> list[str]:
+        if _is_synthetic_field_getter(target_method):
+            return self._CallSyntheticFieldGetter(target_method, args)
         static = "static" in target_method.access
         cls_var = Var.from_descriptor(target_method.get_class_name())
         codes: list[str] = []
@@ -749,7 +798,43 @@ class Harness:
         codes.append(f'printf("[+] call method {target_method.name} finished!\\n");')
         return codes
 
+    def _CallSyntheticFieldGetter(
+        self, target_method: MethodAnalysis, args: list[Argument]
+    ) -> list[str]:
+        """Emit the JNI field read represented by a D8/R8 synthetic accessor."""
+
+        fld = _synthetic_field(target_method).get_field()
+        classname = fld.get_class_name()
+        cls_var = Var.from_descriptor(classname)
+        codes: list[str] = []
+        if cls_var not in self._created_vars:
+            codes += self._FindClass(classname)
+        static = "static" in fld.get_access_flags_string()
+        if static:
+            receiver = cls_var
+        else:
+            if not args or not isinstance(args[0], Var):
+                raise InvalidStateError(f"synthetic getter has no receiver: {target_method}")
+            receiver = args[0]
+        field_id = cls_var.get_fieldID(fld.get_name())
+        if field_id not in self._created_vars:
+            codes += self._GetFieldID(cls_var, fld.get_name(), fld.get_descriptor(), static)
+        ret_var = cls_var.get_methodID(target_method).get_return_val()
+        jni_type = (
+            dex_types.TYPE_DESCRIPTOR[fld.get_descriptor()].capitalize()
+            if fld.get_descriptor() in dex_types.TYPE_DESCRIPTOR
+            else "Object"
+        )
+        codes.append(
+            f"auto {ret_var}{{env->Get{'Static' if static else ''}{jni_type}Field({receiver}, {field_id})}};"
+        )
+        self._created_vars.add(ret_var)
+        codes.append("check_JNI_exception();")
+        return codes
+
     def _direct_call(self, target_method: MethodAnalysis, args: list[Argument]) -> list[str]:
+        if _is_synthetic_field_getter(target_method):
+            return self._CallSyntheticFieldGetter(target_method, args)
         codes: list[str] = []
         symbol = Var.from_symbol(self._native_lib, target_method)
         native_api = api.find_api(self._native_lib, target_method)
@@ -794,7 +879,11 @@ class Harness:
             """
             :return arg: int/string if const source, else synthesised var
             """
-            if Attribute.PATH in param.attribute and param.descriptor == "Ljava/lang/String;":
+            if (
+                "path" in self._enabled_semantics
+                and Attribute.PATH in param.attribute
+                and param.descriptor == "Ljava/lang/String;"
+            ):
                 util.log(LogLevel.WARN, f"sources {param.sources} of PATH is ignored")
                 arg = Var.from_descriptor(param.descriptor)
                 codes += self._create_path_var_with_fuzz_input(arg)
@@ -981,7 +1070,31 @@ class Harness:
             args: list[Argument] = []
             array_len_idxs: list[int] = []
             var_count_before = _normal_var_count
-            for i, param in enumerate(node.params):
+            effective_params: list[parameter.Parameter] = []
+            for original_param in node.params:
+                effective_attribute = original_param.attribute
+                if "path" not in self._enabled_semantics:
+                    effective_attribute &= ~Attribute.PATH
+                if "size" not in self._enabled_semantics:
+                    effective_attribute &= ~Attribute.SIZE
+                effective_sources = set(original_param.sources)
+                if "array-len" not in self._enabled_semantics:
+                    effective_sources = {
+                        source
+                        for source in effective_sources
+                        if source.type != operand.OpType.ARRAY_LEN
+                    }
+                effective_params.append(
+                    parameter.Parameter(
+                        original_param.reg,
+                        original_param.descriptor,
+                        effective_attribute,
+                        effective_sources,
+                        original_param.traced,
+                    )
+                )
+
+            for i, param in enumerate(effective_params):
                 if not param.descriptor.startswith("["):
                     param.sources = set(
                         src for src in param.sources if src.type != operand.OpType.NEW_ARRAY
@@ -1034,10 +1147,12 @@ class Harness:
                 args.append(synthesis_arg_with_source(param, codes, array_len_idxs))
             for array_len_idx in array_len_idxs:
                 array_length_var = synthesis_array_length(
-                    node.params[array_len_idx], var_count_before
+                    effective_params[array_len_idx], var_count_before
                 )
                 if array_length_var is None:
-                    array_length_var = Var.from_descriptor(node.params[array_len_idx].descriptor)
+                    array_length_var = Var.from_descriptor(
+                        effective_params[array_len_idx].descriptor
+                    )
                     codes += self._create_length_var_with_fuzz_input(array_length_var)
                 args[array_len_idx] = array_length_var
 
@@ -1119,8 +1234,29 @@ class Harness:
         api_namesig = api_namesig.replace("/", "_").replace(" ", "")
         harness_path = os.path.join(config.HARNESS_PATH, apkname, classname, api_namesig)
         os.makedirs(harness_path, exist_ok=True)
-        id = len(os.listdir(harness_path))
-        harness_path = os.path.join(harness_path, str(id))
+        existing_ids = []
+        for entry in os.scandir(harness_path):
+            if not entry.is_dir():
+                continue
+            prefix = entry.name.split("_", maxsplit=1)[0]
+            if prefix.isdigit():
+                existing_ids.append(int(prefix))
+        harness_id = max(existing_ids, default=-1) + 1
+        disabled_semantics = [
+            hint for hint in SEMANTIC_HINTS if hint not in self._enabled_semantics
+        ]
+        if not disabled_semantics:
+            semantics_suffix = "_all_on"
+        elif len(disabled_semantics) == len(SEMANTIC_HINTS):
+            semantics_suffix = "_all_off"
+        else:
+            semantics_suffix = "_" + "_".join(
+                f"{hint}_off" for hint in disabled_semantics
+            )
+        harness_path = os.path.join(
+            harness_path,
+            f"{harness_id}{semantics_suffix}",
+        )
         os.mkdir(harness_path)
 
         apk_path = os.path.join(config.APK_PATH, apkname + ".apk")

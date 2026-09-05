@@ -14,6 +14,8 @@ def is_enum(classname: str) -> bool:
     if not (classname.startswith("L") and classname.endswith(";")):
         return False
     cls = shared.analysis.get_class_analysis(classname)
+    if cls is None:
+        return False
     return cls.extends == "Ljava/lang/Enum;"
 
 

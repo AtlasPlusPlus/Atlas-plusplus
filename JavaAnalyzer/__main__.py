@@ -18,6 +18,58 @@ from . import harness
 from . import field
 
 
+def _parse_semantic_hint(value: str) -> str:
+    if value not in harness.SEMANTIC_HINTS:
+        choices = ", ".join(harness.SEMANTIC_HINTS)
+        raise argparse.ArgumentTypeError(
+            f"unknown semantic hint '{value}'; choose from: {choices}"
+        )
+    return value
+
+
+def _parse_semantics(value: str) -> frozenset[str]:
+    terms = [term.strip() for term in value.split(",")]
+    if not terms or any(not term for term in terms):
+        raise argparse.ArgumentTypeError("semantic specification contains an empty item")
+    if terms == ["all"]:
+        return harness.ALL_SEMANTIC_HINTS
+    if terms == ["none"]:
+        return frozenset()
+
+    if terms[0] == "all":
+        enabled = set(harness.ALL_SEMANTIC_HINTS)
+        seen: set[str] = set()
+        for term in terms[1:]:
+            if not term.startswith("-") or len(term) == 1:
+                raise argparse.ArgumentTypeError(
+                    "items after 'all' must be exclusions such as '-path'"
+                )
+            hint = _parse_semantic_hint(term[1:])
+            if hint in seen:
+                raise argparse.ArgumentTypeError(f"duplicate semantic hint '-{hint}'")
+            seen.add(hint)
+            enabled.remove(hint)
+        return frozenset(enabled)
+
+    if any(term in {"all", "none"} or term.startswith("-") for term in terms):
+        raise argparse.ArgumentTypeError(
+            "use 'all,-path' for exclusions, or list the exact enabled hints"
+        )
+
+    enabled: set[str] = set()
+    for term in terms:
+        hint = _parse_semantic_hint(term)
+        if hint in enabled:
+            raise argparse.ArgumentTypeError(f"duplicate semantic hint '{hint}'")
+        enabled.add(hint)
+    return frozenset(enabled)
+
+
+def _semantic_names(semantics: frozenset[str]) -> str:
+    names = [hint for hint in harness.SEMANTIC_HINTS if hint in semantics]
+    return ",".join(names) if names else "none"
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("apkname", help="target apk name, e.g. SamsungCamera")
@@ -26,7 +78,28 @@ def main():
         "--classname",
         help='target classname, e.g. "Lcom/samsung/android/panorama/InterfaceNative;". None for all classes of target apk.',
     )
+    parser.add_argument(
+        "--native-lib",
+        metavar="LIB",
+        help="use LIB as the target native library instead of inferring it per class",
+    )
+    parser.add_argument(
+        "--semantics",
+        type=_parse_semantics,
+        default=harness.ALL_SEMANTIC_HINTS,
+        metavar="SPEC",
+        help=(
+            "enabled semantic hints: all (default), none, an exact list such as "
+            "path,size,array-len, or exclusions such as all,-path"
+        ),
+    )
     args = parser.parse_args()
+    enabled = _semantic_names(args.semantics)
+    disabled = _semantic_names(harness.ALL_SEMANTIC_HINTS - args.semantics)
+    util.log(
+        LogLevel.INFO,
+        f"semantic hints: enabled=[{enabled}], disabled=[{disabled}]",
+    )
     apk_path = os.path.join(config.APK_PATH, args.apkname)
     if not os.path.exists(apk_path):
         apk_path = apk_path + ".apk" if os.path.exists(apk_path + ".apk") else apk_path + ".jar"
@@ -48,7 +121,7 @@ def main():
             continue
         if args.classname and cls.name != args.classname:
             continue
-        native_lib = api.get_class_lib(cls)
+        native_lib = args.native_lib or api.get_class_lib(cls)
         if not native_lib:
             util.log(LogLevel.DEBUG, f"native library of {cls.name} not found")
             continue
@@ -80,7 +153,7 @@ def main():
                     util.log(LogLevel.INFO, f"api sequence:")
                     for node in api_sequence:
                         util.log(LogLevel.INFO, f"- {node}")
-                    h = harness.Harness(native_lib, api_sequence)
+                    h = harness.Harness(native_lib, api_sequence, args.semantics)
                     h.output_harness(args.apkname, cls.name, method_namesig)
             except NotImplementedError as wie:
                 util.log(LogLevel.ERROR, f"{wie}")
